@@ -1,0 +1,33 @@
+{
+  "name": "clickup-local-updater",
+  "version": "1.0.0",
+  "description": "A command-line interface (CLI) tool to interact with the ClickUp API for updating tasks and documentation locally.",
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/cli.ts",
+    "cli": "ts-node src/cli.ts"
+  },
+  "keywords": [
+    "clickup",
+    "cli",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.14.4",
+    "@types/express": "^5.0.1",
+    "@types/node": "^20.17.27",
+    "nodemon": "^3.1.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2"
+  }
+}

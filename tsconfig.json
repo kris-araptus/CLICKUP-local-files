@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2016", // Or a newer target like ES2020
+    "module": "CommonJS",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "node", // Ensure Node.js module resolution
+    "resolveJsonModule": true // Allows importing JSON files
+  },
+  "include": ["src/**/*"], // Only compile files in the src directory
+  "exclude": ["node_modules", "**/*.spec.ts"] // Exclude node_modules and test files
+} 
