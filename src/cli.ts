@@ -5,6 +5,7 @@ import { registerTaskCommands } from './commands/taskCommands';
 import { registerListCommands } from './commands/listCommands';
 import { registerSyncCommands } from './commands/syncCommands';
 import { registerDocCommands } from './commands/docCommands';
+import { registerWorkCommands } from './commands/workCommands';
 
 // Initialize Commander
 const program = new Command();
@@ -19,6 +20,7 @@ registerTaskCommands(program);
 registerListCommands(program);
 registerSyncCommands(program);
 registerDocCommands(program);
+registerWorkCommands(program);
 
 // Parse command-line arguments
 program.parse(process.argv);

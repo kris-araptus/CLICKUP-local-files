@@ -43,14 +43,40 @@ function taskNameToSlug(name: string): string {
   return slug.length > MAX_SLUG_LENGTH ? slug.slice(0, MAX_SLUG_LENGTH) : slug;
 }
 
-/** Return a unique .md filename in dir; appends _2, _3, etc. if slug already exists */
-function uniqueSlugFilename(dir: string, slug: string, _taskId: string): string {
+/**
+ * Scan a directory for an existing .md file whose frontmatter `id` matches taskId.
+ * Returns the full path if found, null otherwise.
+ * Used to make export idempotent — same task always overwrites its own file.
+ */
+function findFileByTaskId(dir: string, taskId: string): string | null {
+  try {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      const raw = fs.readFileSync(filePath, 'utf8').slice(0, 500);
+      const m = raw.match(/^id:\s*"([^"]+)"/m);
+      if (m && m[1] === taskId) return filePath;
+    }
+  } catch { /* unreadable dir — ignore */ }
+  return null;
+}
+
+/**
+ * Resolve the file path for a task export.
+ * If the task was previously exported (matched by ID), returns that path so it
+ * gets overwritten in place. Otherwise generates a new slug-based filename.
+ */
+function resolveFilePath(dir: string, slug: string, taskId: string): string {
+  const existing = findFileByTaskId(dir, taskId);
+  if (existing) return existing;
+
+  // New file — use slug, appending _2, _3 only to avoid clobbering a *different* task
   const base = `${slug}.md`;
   const pathFor = (name: string) => path.join(dir, name);
-  if (!fs.existsSync(pathFor(base))) return base;
+  if (!fs.existsSync(pathFor(base))) return path.join(dir, base);
   let n = 2;
   while (fs.existsSync(pathFor(`${slug}_${n}.md`))) n++;
-  return `${slug}_${n}.md`;
+  return path.join(dir, `${slug}_${n}.md`);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,8 +344,7 @@ export async function exportTask(taskId: string): Promise<string> {
     const task = await getTask(taskId);
     const projectName = task._space_name || task.space?.name || task.list?.name || '_unsorted';
     const dir = getTaskDir(projectName);
-    const filename = uniqueSlugFilename(dir, taskNameToSlug(task.name), task.id);
-    const filePath = path.join(dir, filename);
+    const filePath = resolveFilePath(dir, taskNameToSlug(task.name), task.id);
 
     task.comments = await getTaskComments(task.id);
 
@@ -378,8 +403,7 @@ export async function exportTasks(tasks: any[]): Promise<string[]> {
 
       const projectName = fullTask._space_name || fullTask.space?.name || fullTask.list?.name || '_unsorted';
       const dir      = getTaskDir(projectName);
-      const filename = uniqueSlugFilename(dir, taskNameToSlug(fullTask.name), fullTask.id);
-      const filePath = path.join(dir, filename);
+      const filePath = resolveFilePath(dir, taskNameToSlug(fullTask.name), fullTask.id);
 
       fullTask.comments = await getTaskComments(fullTask.id);
 

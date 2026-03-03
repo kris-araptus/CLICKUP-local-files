@@ -1,0 +1,13 @@
+{
+  "_readme": "Maps ClickUp space names to /Software/ directory names. Only entries that differ need to be listed here. Exact matches are resolved automatically. Set a value to null to skip that space (no project dir).",
+
+  "ARAP": "Araptus",
+  "APPNT": "APP-Backend",
+  "BHOG": "BHOGN",
+  "CYBK": "CYBKN",
+  "INDVIS": "INDV02",
+
+  "GCIS": "GCIA",
+  "BLGV": "BeyondLimits/BLGVN",
+  "BLNF": "BeyondLimits/BLNFN"
+}
