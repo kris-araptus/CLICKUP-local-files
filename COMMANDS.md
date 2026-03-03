@@ -131,6 +131,30 @@ npx ts-node src/cli.ts sync push <file_path>
 npx ts-node src/cli.ts sync push-task <task_id>
 ```
 
+**What gets pushed:**
+- Task name, description, and status (from frontmatter)
+- Any new comments added locally (see below)
+
+**Adding a comment locally:**
+
+Open the exported markdown file and append a new `###` block **without** an `[id:...]` marker to the `## Comments` section:
+
+```markdown
+## Comments
+
+### Jane · 3/1/2026, 10:00 AM [id:462]
+
+Original client comment (existing — not re-posted).
+
+---
+
+### New Comment
+
+Your reply here — this will be posted to ClickUp on push.
+```
+
+Any `###` block missing `[id:...]` is treated as new and posted via `POST /task/{id}/comment`. After pushing, run `sync pull <task_id>` to refresh the file with the new comment's ID.
+
 ## Doc Commands
 
 Commands for working with ClickUp documents.

@@ -187,12 +187,12 @@ export async function getApiClient(): Promise<AxiosInstance> {
   const token = await getAccessToken();
   
   return axios.create({
-    baseURL: API_BASE_URL,
-    headers: {
+  baseURL: API_BASE_URL,
+  headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
+    'Content-Type': 'application/json',
+  },
+});
 }
 
 // --- Task Functions ---
@@ -210,7 +210,9 @@ export async function getTask(taskId: string): Promise<any> {
 
     console.log(`Fetching task details for ID: ${cleanTaskId}...`);
     const clickupApi = await getApiClient();
-    const response = await clickupApi.get(`/task/${cleanTaskId}`);
+    const response = await clickupApi.get(`/task/${cleanTaskId}`, {
+      params: { include_attachments: true },
+    });
     return response.data;
   } catch (error) {
     handleApiError(error, `fetching task ${taskId}`);
@@ -340,7 +342,8 @@ export async function getTasks(listId: string, options: any = {}): Promise<any> 
   try {
     console.log(`Fetching tasks for list ID: ${listId}...`);
     const clickupApi = await getApiClient();
-    const response = await clickupApi.get(`/list/${listId}/task`, { params: options });
+    const params = { include_attachments: true, ...options };
+    const response = await clickupApi.get(`/list/${listId}/task`, { params });
     return response.data.tasks;
   } catch (error) {
     handleApiError(error, `fetching tasks for list ${listId}`);
@@ -575,7 +578,43 @@ function handleApiError(error: any, context: string): void {
   }
 }
 
-// Add more functions here for updating tasks, fetching/updating docs, etc.
-// export async function updateTask(...) { ... }
-// export async function getDoc(...) { ... }
-// export async function updateDoc(...) { ... } 
+// --- Comment Functions ---
+
+/**
+ * Fetch all comments for a task.
+ * @param taskId - The ID of the task.
+ * @returns Promise resolving with an array of comment objects.
+ */
+export async function getTaskComments(taskId: string): Promise<any[]> {
+  try {
+    console.log(`Fetching comments for task ID: ${taskId}...`);
+    const clickupApi = await getApiClient();
+    const response = await clickupApi.get(`/task/${taskId}/comment`);
+    return response.data.comments || [];
+  } catch (error) {
+    // Don't throw — missing comments should never break an export
+    handleApiError(error, `fetching comments for task ${taskId}`);
+    return [];
+  }
+}
+
+/**
+ * Post a new comment to a task.
+ * @param taskId      - The ID of the task.
+ * @param commentText - Plain text content of the comment.
+ * @returns Promise resolving with the created comment data.
+ */
+export async function postComment(taskId: string, commentText: string): Promise<any> {
+  try {
+    console.log(`Posting comment to task ID: ${taskId}...`);
+    const clickupApi = await getApiClient();
+    const response = await clickupApi.post(`/task/${taskId}/comment`, {
+      comment_text: commentText,
+      notify_all: false,
+    });
+    return response.data;
+  } catch (error) {
+    handleApiError(error, `posting comment to task ${taskId}`);
+    throw error;
+  }
+} 

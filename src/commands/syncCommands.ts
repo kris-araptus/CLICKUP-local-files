@@ -40,7 +40,7 @@ export function registerSyncCommands(program: Command) {
           return;
         }
         
-        const filePaths = exportTasks(tasks);
+        const filePaths = await exportTasks(tasks);
         console.log(`Exported ${filePaths.length} tasks to the 'tasks' directory.`);
       } catch (error) {
         console.error(`Failed to export tasks from list ${listId}.`);

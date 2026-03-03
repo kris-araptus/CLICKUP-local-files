@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { getTask, updateTask } from './clickup';
+import { getTask, updateTask, getApiClient, getTaskComments, postComment } from './clickup';
 
-// Directory where task documents will be stored
+// Directory where task documents will be stored (project subdirs go under this)
 const TASKS_DIR = path.join(process.cwd(), 'tasks');
 
 // Make sure tasks directory exists
@@ -10,60 +10,289 @@ if (!fs.existsSync(TASKS_DIR)) {
   fs.mkdirSync(TASKS_DIR, { recursive: true });
 }
 
+/** Safe directory name from space/project name (no path overflow, no invalid chars) */
+function sanitizeDirName(name: string): string {
+  if (!name || !name.trim()) return '_unsorted';
+  const sanitized = name
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_.-]/g, '');
+  return sanitized || '_unsorted';
+}
+
+/** Get project directory path and ensure it exists (tasks/<project>/) */
+function getTaskDir(spaceName: string): string {
+  const dir = path.join(TASKS_DIR, sanitizeDirName(spaceName));
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+/** Safe filename slug from task name */
+const MAX_SLUG_LENGTH = 80;
+
+function taskNameToSlug(name: string): string {
+  if (!name || !name.trim()) return 'task';
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_-]/g, '');
+  if (!slug) return 'task';
+  return slug.length > MAX_SLUG_LENGTH ? slug.slice(0, MAX_SLUG_LENGTH) : slug;
+}
+
+/** Return a unique .md filename in dir; appends _2, _3, etc. if slug already exists */
+function uniqueSlugFilename(dir: string, slug: string, _taskId: string): string {
+  const base = `${slug}.md`;
+  const pathFor = (name: string) => path.join(dir, name);
+  if (!fs.existsSync(pathFor(base))) return base;
+  let n = 2;
+  while (fs.existsSync(pathFor(`${slug}_${n}.md`))) n++;
+  return `${slug}_${n}.md`;
+}
+
+// ---------------------------------------------------------------------------
+// Fix 1 — HTML-to-markdown
+// ---------------------------------------------------------------------------
+
 /**
- * Convert a task to a markdown document
- * @param task The task data from ClickUp
- * @returns A markdown string representation of the task
+ * Minimal HTML-to-markdown converter.
+ * Feedbucket embeds clickable links as <a> tags in ClickUp task descriptions.
+ * This preserves them as markdown links instead of stripping the href.
  */
-function taskToMarkdown(task: any): string {
-  const metadata = {
-    id: task.id,
-    name: task.name,
-    status: task.status?.status || 'unknown',
-    due_date: task.due_date || '',
-    list_id: task.list?.id || '',
-    updated_at: new Date().toISOString(),
+function htmlToMarkdown(text: string): string {
+  if (!text) return '';
+  return text
+    // Anchor tags → markdown links
+    .replace(/<a\s+(?:[^>]*?\s+)?href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+    // Block-level elements → newlines
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    // Strip any remaining tags
+    .replace(/<[^>]+>/g, '')
+    // Decode HTML entities
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
+// Fix 3 — Feedbucket metadata parser
+// ---------------------------------------------------------------------------
+
+interface FeedbucketMeta {
+  fb_reporter?: string;
+  fb_page?: string;
+  fb_device?: string;
+  fb_system?: string;
+  fb_browser?: string;
+  fb_viewport?: string;
+  fb_type?: string;
+}
+
+/**
+ * Parse Feedbucket's structured metadata block out of a task description.
+ * Feedbucket always includes "Feedbucket:" in the description, so we use that
+ * as the detection signal.
+ * Returns null when the task was not created by Feedbucket.
+ */
+function parseFeedbucketMeta(description: string): FeedbucketMeta | null {
+  if (!description || !description.includes('Feedbucket')) return null;
+
+  const grab = (label: string): string | undefined => {
+    const m = description.match(new RegExp(`${label}:\\s*(.+)`));
+    if (!m) return undefined;
+    return m[1]
+      .replace(/<[^>]+>/g, '')   // strip any inline HTML tags
+      .replace(/"/g, "'")        // escape quotes for YAML safety
+      .trim();
   };
 
-  // Convert to YAML front matter
+  const meta: FeedbucketMeta = {
+    fb_reporter: grab('Reporter'),
+    fb_page:     grab('Page'),
+    fb_device:   grab('Device'),
+    fb_system:   grab('System'),
+    fb_browser:  grab('Browser'),
+    fb_viewport: grab('Viewport'),
+    fb_type:     grab('Type'),
+  };
+
+  // Remove undefined keys so they don't pollute the frontmatter
+  (Object.keys(meta) as (keyof FeedbucketMeta)[]).forEach(k => {
+    if (!meta[k]) delete meta[k];
+  });
+
+  return Object.keys(meta).length > 0 ? meta : null;
+}
+
+// ---------------------------------------------------------------------------
+// Fix 2 — Attachment downloader
+// ---------------------------------------------------------------------------
+
+/**
+ * Download all attachments for a task into tasks/<project>/<taskId>-attachments/.
+ * Returns a map of { filename → relative path from the .md file } for embedding.
+ *
+ * ClickUp attachment URLs are absolute. We use the authenticated API client so
+ * the Bearer token is sent — required for non-public attachments.
+ *
+ * Already-downloaded files are skipped (idempotent on re-export).
+ */
+async function downloadAttachments(
+  task: any,
+  taskDir: string,
+  taskId: string
+): Promise<Record<string, string>> {
+  const attachments: any[] = task.attachments || [];
+  if (attachments.length === 0) return {};
+
+  const attachDir = path.join(taskDir, `${taskId}-attachments`);
+  if (!fs.existsSync(attachDir)) {
+    fs.mkdirSync(attachDir, { recursive: true });
+  }
+
+  // Authenticated client — works for absolute URLs (axios ignores baseURL for absolute)
+  const apiClient = await getApiClient();
+  const localPaths: Record<string, string> = {};
+
+  for (const attachment of attachments) {
+    const filename: string = attachment.title || attachment.id;
+    const localPath = path.join(attachDir, filename);
+    const relativePath = `./${taskId}-attachments/${filename}`;
+
+    if (fs.existsSync(localPath)) {
+      localPaths[filename] = relativePath;
+      continue;
+    }
+
+    if (!attachment.url) {
+      console.warn(`  Attachment "${filename}" has no URL, skipping.`);
+      continue;
+    }
+
+    try {
+      const response = await apiClient.get(attachment.url, {
+        responseType: 'arraybuffer',
+      });
+      fs.writeFileSync(localPath, Buffer.from(response.data));
+      localPaths[filename] = relativePath;
+      console.log(`  Downloaded attachment: ${filename}`);
+    } catch (err: any) {
+      console.warn(`  Could not download "${filename}": ${err?.message || err}`);
+    }
+  }
+
+  return localPaths;
+}
+
+// ---------------------------------------------------------------------------
+// Markdown serialisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a task to a markdown document.
+ *
+ * @param task             Raw task data from ClickUp API
+ * @param localAttachments Map of { filename → relative path } from downloadAttachments()
+ * @param feedbucketMeta   Parsed Feedbucket fields, or null for non-Feedbucket tasks
+ */
+function taskToMarkdown(
+  task: any,
+  localAttachments: Record<string, string> = {},
+  feedbucketMeta: FeedbucketMeta | null = null
+): string {
+  const base: Record<string, string> = {
+    id:          task.id,
+    name:        task.name,
+    status:      task.status?.status || 'unknown',
+    due_date:    task.due_date || '',
+    list_id:     task.list?.id || '',
+    list_name:   task._list_name || task.list?.name || '',
+    folder_name: task._folder_name || task.folder?.name || '',
+    space_name:  task._space_name || task.space?.name || task.team?.name || '',
+    updated_at:  new Date().toISOString(),
+  };
+
+  // Merge Feedbucket fields into frontmatter (prefixed fb_* for clarity)
+  const metadata = feedbucketMeta ? { ...base, ...feedbucketMeta } : base;
+
   const frontMatter = Object.entries(metadata)
     .map(([key, value]) => `${key}: "${value}"`)
     .join('\n');
 
-  // Create markdown content
+  const projectPath = [metadata.space_name, metadata.folder_name, metadata.list_name]
+    .filter(Boolean)
+    .join(' › ') || 'Unknown';
+
+  // Fix 1: convert HTML description so links survive
+  const description = htmlToMarkdown(task.description || '');
+
+  // Fix 2: embed attachments — local image when downloaded, remote link as fallback
+  const attachmentLines: string[] = (task.attachments || []).map((a: any) => {
+    const filename: string = a.title || a.id;
+    const local = localAttachments[filename];
+    return local
+      ? `![${filename}](${local})`          // renders inline in VS Code / Obsidian
+      : `[${filename}](${a.url || '#'})`;    // clickable fallback
+  });
+
+  const attachmentsSection = attachmentLines.length > 0
+    ? `\n## Attachments\n\n${attachmentLines.join('\n\n')}\n`
+    : '';
+
+  // Render comments with embedded ID so push can distinguish new from existing.
+  // Format: ### Username · Jan 15 2026, 10:30 AM [id:462]
+  // New comments written locally omit the [id:...] marker — push detects and posts them.
+  const commentsSection = (task.comments || [])
+    .map((comment: any) => {
+      const user = comment.user?.username || comment.user?.email || 'User';
+      const ts   = Number(comment.date);
+      const date = isNaN(ts) ? String(comment.date || '') : new Date(ts).toLocaleString();
+      const id   = comment.id ? ` [id:${comment.id}]` : '';
+      const text = htmlToMarkdown(comment.comment_text || '');
+      return `### ${user} · ${date}${id}\n\n${text}`;
+    })
+    .join('\n\n---\n\n');
+
   return `---
 ${frontMatter}
 ---
 
 # ${task.name}
 
-${task.description || ''}
+**Project:** ${projectPath}
 
+${description}
+${attachmentsSection}
 ## Comments
 
-${(task.comments || []).map((comment: any) => 
-  `### ${comment.user?.username || 'User'} (${new Date(comment.date).toLocaleString()})
-${comment.comment_text || ''}`
-).join('\n\n')}
+${commentsSection}
 `;
 }
 
+// ---------------------------------------------------------------------------
+// Markdown deserialisation (push back to ClickUp)
+// ---------------------------------------------------------------------------
+
 /**
- * Parse a markdown file back into task data
- * @param markdown The markdown content
- * @returns An object with task data and content
+ * Parse a markdown file back into task data.
  */
-function markdownToTask(markdown: string): { metadata: any, content: string } {
-  // Extract front matter
+function markdownToTask(markdown: string): { metadata: any; content: string } {
   const frontMatterMatch = markdown.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  
+
   if (!frontMatterMatch) {
     throw new Error('Invalid markdown format: Missing front matter');
   }
-  
+
   const [, frontMatter, content] = frontMatterMatch;
-  
-  // Parse front matter into metadata
+
   const metadata: Record<string, string> = {};
   frontMatter.split('\n').forEach(line => {
     const match = line.match(/^([\w_]+):\s*"(.*)"$/);
@@ -72,27 +301,41 @@ function markdownToTask(markdown: string): { metadata: any, content: string } {
       metadata[key] = value;
     }
   });
-  
+
   return { metadata, content };
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Export a task from ClickUp to a local markdown file
- * @param taskId The ID of the task to export
- * @returns The path to the created file
+ * Export a task from ClickUp to a local markdown file.
+ * Downloads all attachments as local files and embeds them inline.
  */
 export async function exportTask(taskId: string): Promise<string> {
   try {
     const task = await getTask(taskId);
-    const markdown = taskToMarkdown(task);
-    
-    // Create filename from task ID and sanitized name
-    const safeTitle = task.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const filename = `${task.id}_${safeTitle}.md`;
-    const filePath = path.join(TASKS_DIR, filename);
-    
-    // Write to file
+    const projectName = task._space_name || task.space?.name || task.list?.name || '_unsorted';
+    const dir = getTaskDir(projectName);
+    const filename = uniqueSlugFilename(dir, taskNameToSlug(task.name), task.id);
+    const filePath = path.join(dir, filename);
+
+    task.comments = await getTaskComments(task.id);
+
+    const localAttachments = await downloadAttachments(task, dir, task.id);
+    const feedbucketMeta   = parseFeedbucketMeta(task.description || '');
+
+    const markdown = taskToMarkdown(task, localAttachments, feedbucketMeta);
     fs.writeFileSync(filePath, markdown, 'utf8');
+
+    if (Object.keys(localAttachments).length > 0) {
+      console.log(`  Attachments saved to: ${dir}/${task.id}-attachments/`);
+    }
+    if (task.comments.length > 0) {
+      console.log(`  ${task.comments.length} comment(s) included.`);
+    }
+
     return filePath;
   } catch (error) {
     console.error(`Failed to export task ${taskId}:`, error);
@@ -101,56 +344,112 @@ export async function exportTask(taskId: string): Promise<string> {
 }
 
 /**
- * Export multiple tasks from a list
- * @param tasks Array of task objects
- * @returns Array of file paths created
+ * Export multiple tasks from a list, downloading attachments for each.
+ *
+ * The ClickUp list endpoint should return attachments when include_attachments=true
+ * is passed (handled in getTasks). If a task still comes back without the field
+ * (older API behaviour), we do a single individual getTask() fetch to get the
+ * full data before writing the file.
  */
-export function exportTasks(tasks: any[]): string[] {
+export async function exportTasks(tasks: any[]): Promise<string[]> {
   const filePaths: string[] = [];
-  
-  tasks.forEach(task => {
+
+  for (const task of tasks) {
     try {
-      const markdown = taskToMarkdown(task);
-      
-      // Create filename from task ID and sanitized name
-      const safeTitle = task.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const filename = `${task.id}_${safeTitle}.md`;
-      const filePath = path.join(TASKS_DIR, filename);
-      
-      // Write to file
+      // Preserve metadata injected by listCommands (space/folder/list names)
+      const spaceName  = task._space_name;
+      const folderName = task._folder_name;
+      const listName   = task._list_name;
+
+      // If the list endpoint didn't return attachments, fetch the full task
+      let fullTask = task;
+      if (task.attachments === undefined) {
+        try {
+          fullTask = await getTask(task.id);
+          // Re-attach the display metadata stripped by the individual fetch
+          fullTask._space_name  = spaceName;
+          fullTask._folder_name = folderName;
+          fullTask._list_name   = listName;
+        } catch {
+          // Fall back to the original task data if the individual fetch fails
+          fullTask = task;
+        }
+      }
+
+      const projectName = fullTask._space_name || fullTask.space?.name || fullTask.list?.name || '_unsorted';
+      const dir      = getTaskDir(projectName);
+      const filename = uniqueSlugFilename(dir, taskNameToSlug(fullTask.name), fullTask.id);
+      const filePath = path.join(dir, filename);
+
+      fullTask.comments = await getTaskComments(fullTask.id);
+
+      const localAttachments = await downloadAttachments(fullTask, dir, fullTask.id);
+      const feedbucketMeta   = parseFeedbucketMeta(fullTask.description || '');
+
+      const markdown = taskToMarkdown(fullTask, localAttachments, feedbucketMeta);
       fs.writeFileSync(filePath, markdown, 'utf8');
       filePaths.push(filePath);
     } catch (error) {
       console.error(`Failed to export task ${task.id}:`, error);
     }
-  });
-  
+  }
+
   return filePaths;
 }
 
 /**
- * Import a task from a local markdown file back to ClickUp
- * @param filePath Path to the markdown file
- * @returns True if the update was successful
+ * Import a task from a local markdown file back to ClickUp.
+ * Strips the Attachments section before pushing — we never push local image paths
+ * back to ClickUp as task content.
  */
 export async function importTask(filePath: string): Promise<boolean> {
   try {
     const markdown = fs.readFileSync(filePath, 'utf8');
     const { metadata, content } = markdownToTask(markdown);
-    
-    // Extract task description (everything after the heading but before comments)
-    const descriptionMatch = content.match(/# .*\n\n([\s\S]*?)(?:\n## Comments|$)/);
-    const description = descriptionMatch ? descriptionMatch[1].trim() : '';
-    
-    // Prepare update payload
+
+    // Extract description: everything after the heading, stop before Attachments or Comments
+    const descriptionMatch = content.match(
+      /# .*\n\n([\s\S]*?)(?:\n## Attachments|\n## Comments|$)/
+    );
+    let description = descriptionMatch ? descriptionMatch[1].trim() : '';
+    // Remove the **Project:** context line (display-only)
+    description = description.replace(/^\*\*Project:\*\* .+$/m, '').trim();
+
     const updatePayload = {
-      name: metadata.name,
+      name:        metadata.name,
       description,
-      status: metadata.status,
+      status:      metadata.status,
     };
-    
-    // Call the ClickUp API to update the task
+
     await updateTask(metadata.id, updatePayload);
+
+    // Find and post any new comments — blocks under ## Comments that have no [id:xxx] marker.
+    // To add a comment locally: append a new ### block without [id:...] before pushing.
+    const commentsSectionMatch = content.match(/## Comments\n\n([\s\S]*)$/);
+    if (commentsSectionMatch) {
+      const blocks = commentsSectionMatch[1]
+        .split(/\n\n---\n\n/)
+        .map(b => b.trim())
+        .filter(b => b.startsWith('### '));
+
+      let posted = 0;
+      for (const block of blocks) {
+        const headerLine = block.split('\n')[0];
+        const isExisting = /\[id:[^\]]+\]/.test(headerLine);
+        if (isExisting) continue;
+
+        const text = block.split('\n').slice(1).join('\n').trim();
+        if (!text) continue;
+
+        await postComment(metadata.id, text);
+        posted++;
+      }
+
+      if (posted > 0) {
+        console.log(`  Posted ${posted} new comment(s) to ClickUp. Run sync pull to refresh IDs.`);
+      }
+    }
+
     return true;
   } catch (error) {
     console.error(`Failed to import task from ${filePath}:`, error);
@@ -159,27 +458,40 @@ export async function importTask(filePath: string): Promise<boolean> {
 }
 
 /**
- * Get all local task files
- * @returns Array of task file paths
+ * Get all local task files (under tasks/ and any tasks/<project>/ subdirs).
+ * Skips attachment directories.
  */
 export function getLocalTasks(): string[] {
-  return fs.readdirSync(TASKS_DIR)
-    .filter(file => file.endsWith('.md'))
-    .map(file => path.join(TASKS_DIR, file));
+  const paths: string[] = [];
+  const entries = fs.readdirSync(TASKS_DIR, { withFileTypes: true });
+
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const subDir = path.join(TASKS_DIR, e.name);
+      const files = fs.readdirSync(subDir)
+        .filter(f => f.endsWith('.md'));
+      files.forEach(f => paths.push(path.join(subDir, f)));
+    } else if (e.name.endsWith('.md')) {
+      paths.push(path.join(TASKS_DIR, e.name));
+    }
+  }
+
+  return paths;
 }
 
 /**
- * Get a specific local task by ID
- * @param taskId The task ID to find
- * @returns The path to the task file or null if not found
+ * Get a specific local task by ID (searches all project subdirs by frontmatter).
  */
 export function getLocalTaskById(taskId: string): string | null {
-  const files = fs.readdirSync(TASKS_DIR);
-  const taskFile = files.find(file => file.startsWith(`${taskId}_`));
-  
-  if (taskFile) {
-    return path.join(TASKS_DIR, taskFile);
+  const all = getLocalTasks();
+  for (const filePath of all) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8').slice(0, 800);
+      const idMatch = raw.match(/^id:\s*"([^"]+)"/m);
+      if (idMatch && idMatch[1] === taskId) return filePath;
+    } catch {
+      // skip unreadable files
+    }
   }
-  
   return null;
-} 
+}

@@ -100,12 +100,12 @@ npx ts-node src/cli.ts list tasks -l <list_id>
 ### Working with Tasks Locally
 
 ```bash
-# Export a task to a local file
+# Export a task to a local file (includes attachments + full comment thread)
 npx ts-node src/cli.ts sync export-task <task_id>
 
-# Edit the file in your favorite editor...
+# Edit the file — update description, status, or add new comments (see below)
 
-# Push changes back to ClickUp
+# Push changes back to ClickUp (name, description, status, and any new comments)
 npx ts-node src/cli.ts sync push <file_path>
 ```
 
