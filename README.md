@@ -73,10 +73,20 @@ Once configured, you can use the CLI to interact with your ClickUp workspaces, t
 ### How Local Files Work
 
 The ClickUp API itself works with JSON for data exchange. When this tool:
-- **Exports a task/document**: It transforms the JSON response from ClickUp into a Markdown file with YAML frontmatter
-- **Imports a task/document**: It parses the Markdown file back into JSON format to send to the ClickUp API
+- **Exports a task**: Transforms the API response into a Markdown file with YAML frontmatter, downloads attachments as local image files, and fetches the full comment thread
+- **Imports a task**: Parses the Markdown file back to JSON, pushes name/description/status to ClickUp, and posts any new comment blocks as real ClickUp comments
 
-This approach gives you a convenient way to modify content locally with any text editor while maintaining the metadata needed for synchronization.
+**Adding a reply locally:** In the `## Comments` section, append a new `###` block without an `[id:...]` marker — push will post it to ClickUp:
+
+```markdown
+### New Comment
+
+Looked into this — the issue is in the CSS padding. Will fix today.
+```
+
+After pushing, run `sync pull <task_id>` to refresh the file with the posted comment's ID.
+
+**Feedbucket tasks:** Screenshot attachments are downloaded and embedded inline. Feedbucket metadata (reporter, page URL, device, browser) is parsed into searchable YAML frontmatter fields (`fb_reporter`, `fb_page`, `fb_device`, etc.).
 
 ### Navigating ClickUp Resources
 
