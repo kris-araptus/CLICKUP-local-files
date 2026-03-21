@@ -1,5 +1,13 @@
 import { Command } from 'commander';
-import { getWorkspaces, getSpaces, getLists, getFolders, getListsInFolder, getTasks } from '../lib/clickup';
+import {
+  getWorkspaces,
+  getSpaces,
+  getLists,
+  getFolders,
+  getListsInFolder,
+  getTasks,
+  getDefaultWorkspaceId,
+} from '../lib/clickup';
 import { exportTasks } from '../lib/localSync';
 
 export function registerListCommands(program: Command) {
@@ -21,13 +29,22 @@ export function registerListCommands(program: Command) {
   listCommand
     .command('all')
     .description('List all spaces (projects), lists, and tasks in a workspace')
-    .requiredOption('-w, --workspace <workspace_id>', 'Workspace ID')
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
     .option('-e, --export', 'Export all tasks to local Markdown files in ./tasks')
     .option('-a, --archived', 'Include archived tasks')
     .option('--all-statuses', 'Include done/closed tasks (default: only open + in progress)')
-    .action(async (options: { workspace: string; export?: boolean; archived?: boolean; allStatuses?: boolean }) => {
+    .action(async (options: { workspace?: string; export?: boolean; archived?: boolean; allStatuses?: boolean }) => {
       try {
-        const workspaceId = options.workspace;
+        const workspaceId = options.workspace || getDefaultWorkspaceId();
+        if (!workspaceId) {
+          console.error(
+            'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+          );
+          return;
+        }
         const includeArchived = !!options.archived;
         const doExport = !!options.export;
         const includeClosed = !!options.allStatuses;
@@ -109,10 +126,20 @@ export function registerListCommands(program: Command) {
   listCommand
     .command('spaces')
     .description('List all spaces in a workspace')
-    .requiredOption('-w, --workspace <workspace_id>', 'Workspace ID')
-    .action(async (options) => {
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
+    .action(async (options: { workspace?: string }) => {
+      const workspaceId = options.workspace || getDefaultWorkspaceId();
+      if (!workspaceId) {
+        console.error(
+          'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+        );
+        return;
+      }
       try {
-        const spaces = await getSpaces(options.workspace);
+        const spaces = await getSpaces(workspaceId);
         console.log('\nSpaces:');
         spaces.forEach((space: any) => {
           console.log(`  ID: ${space.id}`);
@@ -120,7 +147,7 @@ export function registerListCommands(program: Command) {
           console.log('');
         });
       } catch (error) {
-        console.error(`Failed to list spaces for workspace ${options.workspace}.`);
+        console.error(`Failed to list spaces for workspace ${workspaceId}.`);
       }
     });
 

@@ -8,7 +8,7 @@ A command-line interface (CLI) tool to interact with the ClickUp API for updatin
 
 ## Features
 
-*   List ClickUp workspaces, spaces, folders, lists, and tasks
+*   List ClickUp workspaces, spaces, folders, lists, and tasks (optional default workspace via `CLICKUP_WORKSPACE_ID` in `.env`)
 *   Fetch individual ClickUp task details
 *   Update ClickUp task details (status, assignees, etc.)
 *   Export tasks to local Markdown files for offline editing
@@ -45,9 +45,14 @@ A command-line interface (CLI) tool to interact with the ClickUp API for updatin
     ```dotenv
     CLICKUP_CLIENT_ID=your_client_id_here
     CLICKUP_CLIENT_SECRET=your_client_secret_here
+
+    # Optional: default workspace (team) ID for commands that take -w / --workspace
+    CLICKUP_WORKSPACE_ID=your_workspace_id_here
     ```
 
     Replace `your_client_id_here` and `your_client_secret_here` with the credentials from the ClickUp App you created.
+
+    Get a workspace ID with `npx ts-node src/cli.ts list workspaces` (use the `ID:` value). When `CLICKUP_WORKSPACE_ID` is set, you can omit `-w` on `list spaces`, `list all`, `doc list`, `doc export-all`, and related doc commands that accept a workspace (see [COMMANDS.md](COMMANDS.md)). See [.env.example](.env.example) for a template.
 
     *Note: The `.env` file is included in `.gitignore` to prevent accidentally committing your secrets.*
 
@@ -56,6 +61,9 @@ A command-line interface (CLI) tool to interact with the ClickUp API for updatin
 ```bash
 # List all workspaces
 npx ts-node src/cli.ts list workspaces
+
+# With CLICKUP_WORKSPACE_ID in .env: export all open/in-progress tasks to ./tasks
+npx ts-node src/cli.ts list all -e
 
 # Export a task to edit locally
 npx ts-node src/cli.ts sync export-task <task_id>
@@ -94,7 +102,8 @@ After pushing, run `sync pull <task_id>` to refresh the file with the posted com
 # List all your workspaces
 npx ts-node src/cli.ts list workspaces
 
-# List spaces in a workspace
+# List spaces in a workspace (-w optional if CLICKUP_WORKSPACE_ID is in .env)
+npx ts-node src/cli.ts list spaces
 npx ts-node src/cli.ts list spaces -w <workspace_id>
 
 # List folders in a space
@@ -122,8 +131,8 @@ npx ts-node src/cli.ts sync push <file_path>
 ### Working with ClickUp Docs
 
 ```bash
-# Force-export a doc to a local file
-npx ts-node src/cli.ts doc force-export -t "Document Title" -i <doc_id> -w <workspace_id>
+# Force-export a doc to a local file (-w optional if CLICKUP_WORKSPACE_ID is in .env)
+npx ts-node src/cli.ts doc force-export -t "Document Title" -i <doc_id>
 
 # Edit the file in your favorite editor...
 
@@ -149,20 +158,18 @@ While the ClickUp API provides good support for working with tasks, it has sever
 
 These limitations are inherent to the ClickUp platform and not a limitation of this CLI tool. The Tasks API functionality should work reliably for task operations.
 
-### Document Operations
-The ClickUp Docs API has limitations that affect certain operations:
-
 ## Security Considerations
 
 ### Token Storage
-- The application stores your ClickUp API access token in a local file (`clickup_token_[user-hash].json`)
+- The application stores your ClickUp API access token in a local file in the project root: `.clickup_token_<hash>.json` (the CLI prints the path as `Using token file:` on startup)
 - Each user/machine combination generates a unique token file
 - Never share your token files with others
 - Do not commit token files to version control
 - If you believe your token has been compromised, revoke it from your ClickUp account settings
 
 ### Environment Variables
-- Your `.env` file contains sensitive credentials
+- Your `.env` file contains sensitive credentials (`CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`)
+- `CLICKUP_WORKSPACE_ID` is a convenience default for CLI flags, not a secret, but keep `.env` private if it also holds OAuth secrets
 - Never share your `.env` file or commit it to version control
 - Each user should create their own OAuth application credentials in ClickUp
 

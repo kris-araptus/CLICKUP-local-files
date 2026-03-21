@@ -1,9 +1,8 @@
 import { Command } from 'commander';
-import { getDoc, getDocs, createDoc, updateDoc } from '../lib/clickup';
+import { getDoc, getDocs, createDoc, updateDoc, getApiClient, getDefaultWorkspaceId } from '../lib/clickup';
 import { exportDoc, exportDocs, importDoc, getLocalDocs, getLocalDocById } from '../lib/docSync';
 import fs from 'fs';
 import path from 'path';
-import { getApiClient } from '../lib/clickup';
 
 export function registerDocCommands(program: Command) {
   const docCommand = program
@@ -31,16 +30,26 @@ export function registerDocCommands(program: Command) {
   docCommand
     .command('list')
     .description('List all docs in a workspace')
-    .requiredOption('-w, --workspace <workspace_id>', 'Workspace ID')
-    .action(async (options) => {
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
+    .action(async (options: { workspace?: string }) => {
+      const workspaceId = options.workspace || getDefaultWorkspaceId();
+      if (!workspaceId) {
+        console.error(
+          'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+        );
+        return;
+      }
       try {
-        const docs = await getDocs(options.workspace);
-        
+        const docs = await getDocs(workspaceId);
+
         if (!docs || docs.length === 0) {
           console.log('No docs found in this workspace.');
           return;
         }
-        
+
         console.log('\nDocs:');
         docs.forEach((doc: any) => {
           console.log(`  ID: ${doc.id}`);
@@ -51,7 +60,7 @@ export function registerDocCommands(program: Command) {
           console.log('');
         });
       } catch (error) {
-        console.error(`Failed to list docs for workspace ${options.workspace}.`);
+        console.error(`Failed to list docs for workspace ${workspaceId}.`);
       }
     });
 
@@ -160,21 +169,31 @@ export function registerDocCommands(program: Command) {
   docCommand
     .command('export-all')
     .description('Export all docs from a workspace to local Markdown files')
-    .requiredOption('-w, --workspace <workspace_id>', 'Workspace ID')
-    .action(async (options) => {
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
+    .action(async (options: { workspace?: string }) => {
+      const workspaceId = options.workspace || getDefaultWorkspaceId();
+      if (!workspaceId) {
+        console.error(
+          'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+        );
+        return;
+      }
       try {
-        console.log(`Exporting all docs from workspace ${options.workspace}...`);
-        
-        const docs = await getDocs(options.workspace);
+        console.log(`Exporting all docs from workspace ${workspaceId}...`);
+
+        const docs = await getDocs(workspaceId);
         if (!docs || docs.length === 0) {
           console.log('No docs found in the workspace.');
           return;
         }
-        
+
         const filePaths = exportDocs(docs);
         console.log(`Exported ${filePaths.length} docs to the 'docs' directory.`);
       } catch (error) {
-        console.error(`Failed to export docs from workspace ${options.workspace}.`);
+        console.error(`Failed to export docs from workspace ${workspaceId}.`);
       }
     });
 
@@ -184,9 +203,13 @@ export function registerDocCommands(program: Command) {
     .description('Attempt to find a doc using its URL or by searching all locations')
     .option('-u, --url <doc_url>', 'URL of the doc')
     .option('-i, --id <doc_id>', 'ID of the doc')
-    .option('-w, --workspace <workspace_id>', 'Workspace ID (optional)')
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID for search fallback (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
     .action(async (options) => {
       try {
+        const workspaceForSearch = options.workspace || getDefaultWorkspaceId();
         let docId = options.id;
         
         // If URL is provided, extract the doc ID from it
@@ -246,11 +269,11 @@ export function registerDocCommands(program: Command) {
           }
           
           // If we have a workspace ID, try searching for it in tasks and lists
-          if (options.workspace) {
-            console.log(`Searching in workspace ${options.workspace} for references to doc ${docId}...`);
-            
+          if (workspaceForSearch) {
+            console.log(`Searching in workspace ${workspaceForSearch} for references to doc ${docId}...`);
+
             // Check in folders and lists
-            const folderResponse = await clickupApi.get(`/team/${options.workspace}/folder`);
+            const folderResponse = await clickupApi.get(`/team/${workspaceForSearch}/folder`);
             const folders = folderResponse.data.folders || [];
             
             for (const folder of folders) {
@@ -308,17 +331,22 @@ export function registerDocCommands(program: Command) {
     .requiredOption('-t, --title <title>', 'Doc title')
     .requiredOption('-i, --id <doc_id>', 'Doc ID (from URL)')
     .option('-c, --content <content>', 'Doc content (optional)')
-    .option('-w, --workspace <workspace_id>', 'Workspace ID')
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace / team ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
     .action(async (options) => {
       try {
         console.log(`Force-exporting doc "${options.title}" with ID: ${options.id}...`);
-        
+
+        const teamId = options.workspace || getDefaultWorkspaceId() || '';
+
         // Create a minimum viable doc object
         const doc = {
           id: options.id,
           title: options.title,
           content: options.content || '',
-          team_id: options.workspace || '',
+          team_id: teamId,
           url: `https://app.clickup.com/d/${options.id}`
         };
         

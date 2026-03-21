@@ -21,8 +21,23 @@ npx ts-node src/cli.ts list workspaces
 
 This will:
 1. Open a browser window to authorize with ClickUp
-2. Save the token to a local file (.clickup_token.json)
+2. Save the token to a file in the project root named `.clickup_token_<hash>.json` (the CLI prints `Using token file:` on startup)
 3. Use this token for future requests (valid for ~55 days)
+
+## Default workspace (`CLICKUP_WORKSPACE_ID`)
+
+If you set **`CLICKUP_WORKSPACE_ID`** in `.env` (your ClickUp workspace / team ID from `list workspaces`), these commands use it when you omit **`-w` / `--workspace`**:
+
+| Command | Notes |
+|--------|--------|
+| `list all` | Required unless env is set |
+| `list spaces` | Required unless env is set |
+| `doc list` | Required unless env is set |
+| `doc export-all` | Required unless env is set |
+| `doc find` | Used for the optional workspace search path when direct API lookup fails |
+| `doc force-export` | Fills `team_id` in the exported stub when `-w` is omitted |
+
+Passing **`-w <workspace_id>`** on the command line always overrides the env value.
 
 ## List Commands
 
@@ -38,8 +53,25 @@ npx ts-node src/cli.ts list workspaces
 ### Spaces
 
 ```bash
-# List all spaces in a workspace
+# List all spaces in a workspace (-w optional if CLICKUP_WORKSPACE_ID is set in .env)
+npx ts-node src/cli.ts list spaces
 npx ts-node src/cli.ts list spaces -w <workspace_id>
+```
+
+### Entire workspace (tree)
+
+```bash
+# List all spaces, folders, lists, and open tasks (-w optional if CLICKUP_WORKSPACE_ID is set)
+npx ts-node src/cli.ts list all
+npx ts-node src/cli.ts list all -w <workspace_id>
+
+# Also export every listed task to ./tasks
+npx ts-node src/cli.ts list all -e
+
+# Options:
+# -e, --export            Export all collected tasks to ./tasks
+# -a, --archived          Include archived tasks when fetching
+# --all-statuses          Include done/closed tasks (default: open + in progress only)
 ```
 
 ### Folders
@@ -162,7 +194,8 @@ Commands for working with ClickUp documents.
 ### List Docs
 
 ```bash
-# List all docs in a workspace
+# List all docs in a workspace (-w optional if CLICKUP_WORKSPACE_ID is set)
+npx ts-node src/cli.ts doc list
 npx ts-node src/cli.ts doc list -w <workspace_id>
 
 # List all local doc files
@@ -175,6 +208,8 @@ npx ts-node src/cli.ts doc list-local
 # Find a doc by ID or URL
 npx ts-node src/cli.ts doc find -i <doc_id>
 npx ts-node src/cli.ts doc find -u <doc_url>
+
+# Optional workspace for task/list search fallback (-w optional if CLICKUP_WORKSPACE_ID is set)
 npx ts-node src/cli.ts doc find -i <doc_id> -w <workspace_id>
 ```
 
@@ -191,10 +226,12 @@ npx ts-node src/cli.ts doc get <doc_id>
 # Export a doc to a local file
 npx ts-node src/cli.ts doc export <doc_id>
 
-# Export all docs from a workspace
+# Export all docs from a workspace (-w optional if CLICKUP_WORKSPACE_ID is set)
+npx ts-node src/cli.ts doc export-all
 npx ts-node src/cli.ts doc export-all -w <workspace_id>
 
-# Force-export a doc when the API doesn't work
+# Force-export a doc when the API doesn't work (-w optional if CLICKUP_WORKSPACE_ID is set)
+npx ts-node src/cli.ts doc force-export -t "Doc Title" -i <doc_id>
 npx ts-node src/cli.ts doc force-export -t "Doc Title" -i <doc_id> -w <workspace_id>
 ```
 
@@ -221,7 +258,8 @@ npx ts-node src/cli.ts doc create -l <list_id> -t "Document Title" -c "Content"
 
 ## Tips & Troubleshooting
 
-- If you encounter authentication errors, delete the `.clickup_token.json` file and run any command to re-authenticate
+- If you encounter authentication errors, delete the `.clickup_token_*.json` file in the project root (or the path shown as `Using token file:`) and run any command to re-authenticate
+- If a command says a workspace ID is required, run `list workspaces` and set `CLICKUP_WORKSPACE_ID` in `.env`, or pass `-w <workspace_id>`
 - For Doc operations, check the [ClickUp API Limitations](README.md#clickup-api-limitations) section in the README
 - Task IDs can usually be found in the ClickUp task URL after the `/t/` part
 - All commands that output data in the terminal can be piped to files using standard shell redirects (e.g., `npx ts-node src/cli.ts list workspaces > workspaces.txt`) 

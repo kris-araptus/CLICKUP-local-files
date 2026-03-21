@@ -10,6 +10,12 @@ import crypto from 'crypto';
 // Load environment variables from .env file
 dotenv.config();
 
+/** Workspace (team) ID from `.env` when CLI omits `-w` / `--workspace`. */
+export function getDefaultWorkspaceId(): string | undefined {
+  const v = process.env.CLICKUP_WORKSPACE_ID?.trim();
+  return v || undefined;
+}
+
 const CLIENT_ID = process.env.CLICKUP_CLIENT_ID;
 const CLIENT_SECRET = process.env.CLICKUP_CLIENT_SECRET;
 const API_BASE_URL = 'https://api.clickup.com/api/v2';
