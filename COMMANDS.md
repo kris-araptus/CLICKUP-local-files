@@ -8,6 +8,7 @@ This document contains all available commands for the ClickUp Local Updater CLI 
 - [List Commands](#list-commands)
 - [Task Commands](#task-commands)
 - [Task Sync Commands](#task-sync-commands)
+- [Task markdown filenames](#task-markdown-filenames)
 - [Doc Commands](#doc-commands)
 
 ## Authentication
@@ -186,6 +187,44 @@ Your reply here — this will be posted to ClickUp on push.
 ```
 
 Any `###` block missing `[id:...]` is treated as new and posted via `POST /task/{id}/comment`. After pushing, run `sync pull <task_id>` to refresh the file with the new comment's ID.
+
+## Task markdown filenames
+
+Exported tasks live under `tasks/<Project>/` as Markdown with YAML frontmatter.
+
+**Pattern:** `<status-token>__<slug>.md`
+
+- **`<status-token>`** — Derived from the ClickUp status string at export time: lowercased, spaces → hyphens, filesystem-safe (e.g. `in progress` → `in-progress`, `AI Approved` → `ai-approved`).
+- **`<slug>`** — Derived from the task title (lowercase, underscores); if two tasks in the same folder collide, the exporter appends `_2`, `_3`, etc. to the slug segment only.
+
+**Source of truth:** Frontmatter `status: "..."` is what `sync push` sends to ClickUp. The filename is updated on each export/pull when the remote status changes (the file may be renamed in place).
+
+**Attachments:** Images and files are stored under `tasks/<Project>/<task_id>-attachments/`. Paths inside the `.md` use that folder name (task id), so **renaming the `.md` file does not break attachment links.**
+
+**Migrate existing files** (e.g. after upgrading) to the new names using frontmatter `status`:
+
+```bash
+# Preview renames
+pnpm exec ts-node scripts/migrate-task-filenames.ts --dry-run
+
+# Apply
+pnpm exec ts-node scripts/migrate-task-filenames.ts
+# or: pnpm migrate-task-filenames
+```
+
+**Layout note:** The root folder is **`tasks/`** (plural), then one subdirectory per ClickUp **space** (e.g. `tasks/AMCT/`). There is no top-level `task/` folder — use `tasks/<Project>/…` in paths.
+
+**Find tasks by status in the shell** (examples):
+
+```bash
+# All tasks whose status token is ai-approved (every space under tasks/)
+find tasks -name 'ai-approved__*.md'
+
+# One space only (replace AMCT with your space folder name)
+ls tasks/AMCT/ai-approved__*.md
+```
+
+**Keeping YAML and the prefix aligned:** After a manual rename, make sure frontmatter `status` still matches ClickUp (or run `sync pull <task_id>` / re-export) so the next export does not rename the file again to fix a mismatch.
 
 ## Doc Commands
 

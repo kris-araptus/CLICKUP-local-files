@@ -1,6 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import { getTask, updateTask, getApiClient, getTaskComments, postComment } from './clickup';
+import {
+  taskNameToSlug,
+  statusToFilenameToken,
+  extractSlugPartFromFilename,
+  pickSlugPartForNew,
+  readTaskIdFromMdFile,
+  formatTaskMarkdownFilename,
+} from './taskFilename';
 
 // Directory where task documents will be stored (project subdirs go under this)
 const TASKS_DIR = path.join(process.cwd(), 'tasks');
@@ -29,20 +37,6 @@ function getTaskDir(spaceName: string): string {
   return dir;
 }
 
-/** Safe filename slug from task name */
-const MAX_SLUG_LENGTH = 80;
-
-function taskNameToSlug(name: string): string {
-  if (!name || !name.trim()) return 'task';
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_-]/g, '');
-  if (!slug) return 'task';
-  return slug.length > MAX_SLUG_LENGTH ? slug.slice(0, MAX_SLUG_LENGTH) : slug;
-}
-
 /**
  * Scan a directory for an existing .md file whose frontmatter `id` matches taskId.
  * Returns the full path if found, null otherwise.
@@ -62,21 +56,35 @@ function findFileByTaskId(dir: string, taskId: string): string | null {
 }
 
 /**
- * Resolve the file path for a task export.
- * If the task was previously exported (matched by ID), returns that path so it
- * gets overwritten in place. Otherwise generates a new slug-based filename.
+ * Resolve the path for a task markdown file: `{statusToken}__{slugPart}.md`.
+ * Finds existing file by frontmatter `id` (any legacy name). Renames when status
+ * or naming convention changes. Attachment dirs stay `<taskId>-attachments/` (not tied to .md basename).
  */
-function resolveFilePath(dir: string, slug: string, taskId: string): string {
-  const existing = findFileByTaskId(dir, taskId);
-  if (existing) return existing;
+function resolveFilePath(dir: string, task: any): string {
+  const statusToken = statusToFilenameToken(task.status?.status || '');
+  const existing = findFileByTaskId(dir, task.id);
+  const baseSlug = taskNameToSlug(task.name);
 
-  // New file — use slug, appending _2, _3 only to avoid clobbering a *different* task
-  const base = `${slug}.md`;
-  const pathFor = (name: string) => path.join(dir, name);
-  if (!fs.existsSync(pathFor(base))) return path.join(dir, base);
-  let n = 2;
-  while (fs.existsSync(pathFor(`${slug}_${n}.md`))) n++;
-  return path.join(dir, `${slug}_${n}.md`);
+  if (existing) {
+    let slugPart = extractSlugPartFromFilename(path.basename(existing));
+    let targetPath = path.join(dir, formatTaskMarkdownFilename(statusToken, slugPart));
+
+    if (fs.existsSync(targetPath)) {
+      const idThere = readTaskIdFromMdFile(targetPath);
+      if (idThere && idThere !== task.id) {
+        slugPart = pickSlugPartForNew(dir, statusToken, baseSlug, task.id);
+        targetPath = path.join(dir, formatTaskMarkdownFilename(statusToken, slugPart));
+      }
+    }
+
+    if (path.normalize(existing) !== path.normalize(targetPath)) {
+      fs.renameSync(existing, targetPath);
+    }
+    return targetPath;
+  }
+
+  const slugPart = pickSlugPartForNew(dir, statusToken, baseSlug, task.id);
+  return path.join(dir, formatTaskMarkdownFilename(statusToken, slugPart));
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +352,7 @@ export async function exportTask(taskId: string): Promise<string> {
     const task = await getTask(taskId);
     const projectName = task._space_name || task.space?.name || task.list?.name || '_unsorted';
     const dir = getTaskDir(projectName);
-    const filePath = resolveFilePath(dir, taskNameToSlug(task.name), task.id);
+    const filePath = resolveFilePath(dir, task);
 
     task.comments = await getTaskComments(task.id);
 
@@ -403,7 +411,7 @@ export async function exportTasks(tasks: any[]): Promise<string[]> {
 
       const projectName = fullTask._space_name || fullTask.space?.name || fullTask.list?.name || '_unsorted';
       const dir      = getTaskDir(projectName);
-      const filePath = resolveFilePath(dir, taskNameToSlug(fullTask.name), fullTask.id);
+      const filePath = resolveFilePath(dir, fullTask);
 
       fullTask.comments = await getTaskComments(fullTask.id);
 

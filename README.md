@@ -96,6 +96,8 @@ After pushing, run `sync pull <task_id>` to refresh the file with the posted com
 
 **Feedbucket tasks:** Screenshot attachments are downloaded and embedded inline. Feedbucket metadata (reporter, page URL, device, browser) is parsed into searchable YAML frontmatter fields (`fb_reporter`, `fb_page`, `fb_device`, etc.).
 
+**Task filenames:** Exports use `<status-token>__<title-slug>.md` under `tasks/<Project>/` so you can spot status from the name (e.g. `find tasks -name 'ai-approved__*.md'`). Frontmatter `status` remains what gets pushed to ClickUp; re-export renames the file if status changes. Attachment folders stay `<taskId>-attachments/`, independent of the `.md` name. Details and one-time migration: [COMMANDS.md — Task markdown filenames](COMMANDS.md#task-markdown-filenames).
+
 ### Navigating ClickUp Resources
 
 ```bash
