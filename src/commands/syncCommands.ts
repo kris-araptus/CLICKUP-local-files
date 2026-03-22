@@ -9,6 +9,12 @@ import {
   getLocalTaskById,
   pruneLocalTasks,
 } from '../lib/localSync';
+import {
+  findStaleTaskSpaceDirNames,
+  findStaleProjectMapKeys,
+  removeTaskSpaceDirs,
+  removeProjectMapKeys,
+} from '../lib/staleSpaces';
 import fs from 'fs';
 import path from 'path';
 
@@ -222,6 +228,92 @@ export function registerSyncCommands(program: Command) {
         console.error('Failed to prune local tasks.');
       }
     });
+
+  syncCommand
+    .command('prune-stale-spaces')
+    .description(
+      'Compare live ClickUp spaces to ./tasks subfolders and project-map.json; list or remove stale entries'
+    )
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
+    .option(
+      '--execute',
+      'Delete stale ./tasks/<Space>/ directories and/or project-map keys (default is report only)'
+    )
+    .option(
+      '--no-task-dirs',
+      'With --execute, skip deleting stale folders under ./tasks (only useful with --project-map)'
+    )
+    .option(
+      '--project-map',
+      'With --execute, remove stale keys from project-map.json (space names no longer in the workspace)'
+    )
+    .action(
+      async (options: {
+        workspace?: string;
+        execute?: boolean;
+        noTaskDirs?: boolean;
+        projectMap?: boolean;
+      }) => {
+        try {
+          const workspaceId = options.workspace || getDefaultWorkspaceId();
+          if (!workspaceId) {
+            console.error(
+              'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+            );
+            return;
+          }
+
+          const { staleDirNames } = await findStaleTaskSpaceDirNames(workspaceId);
+          const { staleKeys } = await findStaleProjectMapKeys(workspaceId);
+
+          console.log('Stale task export folders (no matching ClickUp space name after sanitization):');
+          if (staleDirNames.length === 0) {
+            console.log('  (none)');
+          } else {
+            staleDirNames.forEach(d => console.log(`  tasks/${d}/`));
+          }
+
+          console.log('\nStale project-map.json keys (not a current space name):');
+          if (staleKeys.length === 0) {
+            console.log('  (none)');
+          } else {
+            staleKeys.forEach(k => console.log(`  ${k}`));
+          }
+
+          if (!options.execute) {
+            console.log(
+              '\nReport only. Run with --execute to delete stale task folders. Add --project-map to also remove stale map keys.'
+            );
+            return;
+          }
+
+          if (!options.noTaskDirs && staleDirNames.length > 0) {
+            removeTaskSpaceDirs(staleDirNames);
+            console.log(`\nRemoved ${staleDirNames.length} stale folder(s) under ./tasks.`);
+          } else if (options.noTaskDirs) {
+            console.log('\nSkipped deleting task folders (--no-task-dirs).');
+          }
+
+          if (options.projectMap && staleKeys.length > 0) {
+            removeProjectMapKeys(staleKeys);
+            console.log(`Removed ${staleKeys.length} stale key(s) from project-map.json.`);
+          } else if (options.projectMap && staleKeys.length === 0) {
+            console.log('No stale project-map keys to remove.');
+          } else if (!options.projectMap && staleKeys.length > 0) {
+            console.log(
+              '\nStale map keys were not removed (omit --project-map). Re-run with --execute --project-map to update project-map.json.'
+            );
+          }
+
+          console.log('');
+        } catch (error) {
+          console.error('Failed prune-stale-spaces:', error);
+        }
+      }
+    );
 
   // Command to list all local task files
   syncCommand

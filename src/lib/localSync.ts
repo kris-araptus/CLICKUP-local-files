@@ -12,7 +12,7 @@ import {
 } from './taskFilename';
 
 // Directory where task documents will be stored (project subdirs go under this)
-const TASKS_DIR = path.join(process.cwd(), 'tasks');
+export const TASKS_DIR = path.join(process.cwd(), 'tasks');
 
 // Make sure tasks directory exists
 if (!fs.existsSync(TASKS_DIR)) {
@@ -20,7 +20,7 @@ if (!fs.existsSync(TASKS_DIR)) {
 }
 
 /** Safe directory name from space/project name (no path overflow, no invalid chars) */
-function sanitizeDirName(name: string): string {
+export function sanitizeDirName(name: string): string {
   if (!name || !name.trim()) return '_unsorted';
   const sanitized = name
     .trim()

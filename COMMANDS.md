@@ -18,6 +18,7 @@ pnpm run cli -- <command> [subcommand] [options]
 - [Task Commands](#task-commands)
 - [Task Sync Commands](#task-sync-commands)
   - [Refresh open (export + prune)](#refresh-open-export--prune)
+  - [Prune stale spaces / project map](#prune-stale-spaces--project-map)
 - [Work command](#work-command)
 - [Task markdown filenames](#task-markdown-filenames)
 - [Doc Commands](#doc-commands)
@@ -49,6 +50,8 @@ If you set **`CLICKUP_WORKSPACE_ID`** in `.env` (your ClickUp workspace / team I
 | `doc export-all` | Required unless env is set |
 | `doc find` | Used for the optional workspace search path when direct API lookup fails |
 | `doc force-export` | Fills `team_id` in the exported stub when `-w` is omitted |
+| `sync refresh-open` | Required unless env is set |
+| `sync prune-stale-spaces` | Required unless env is set |
 
 Passing **`-w <workspace_id>`** on the command line always overrides the env value.
 
@@ -222,6 +225,29 @@ npx ts-node src/cli.ts sync refresh-open -a --match closed
 
 Equivalent manual sequence: `list all -e` (no extra flags) then `sync prune-local`.
 
+### Prune stale spaces / project map
+
+After you **remove spaces** in ClickUp (or rename them), local **`tasks/<Space>/`** folders and **`project-map.json`** keys can be out of date. This command loads **current space names** from the API and reports:
+
+- **Stale task folders** — subdirectories of `./tasks` whose names no longer match any space (using the same rules as exports: sanitized folder names; **`_unsorted`** is never deleted automatically).
+- **Stale map keys** — entries in **`project-map.json`** (except `_readme`) whose keys are not current space names.
+
+Default is **report only**. **`--execute`** applies deletions.
+
+```bash
+# See what would be cleaned (safe)
+npx ts-node src/cli.ts sync prune-stale-spaces
+
+# Remove stale ./tasks/<Space>/ trees
+npx ts-node src/cli.ts sync prune-stale-spaces --execute
+
+# Also drop removed spaces from project-map.json
+npx ts-node src/cli.ts sync prune-stale-spaces --execute --project-map
+
+# Only fix project-map.json, do not delete task folders
+npx ts-node src/cli.ts sync prune-stale-spaces --execute --no-task-dirs --project-map
+```
+
 ### Pull Tasks
 
 ```bash
@@ -388,6 +414,7 @@ npx ts-node src/cli.ts doc create -l <list_id> -t "Document Title" -c "Content"
 - To **rename existing** task files to `{status}__{slug}.md`, use `pnpm migrate-task-filenames` (see [Task markdown filenames](#task-markdown-filenames))
 - To **delete local** exports for finished work, use `sync prune-local` (see [Prune local tasks](#prune-local-tasks)); run with `--dry-run` first
 - To **export open tasks and prune locals** in one step, use `sync refresh-open` (see [Refresh open (export + prune)](#refresh-open-export--prune))
+- After **removing ClickUp spaces**, run `sync prune-stale-spaces` (then `--execute` / `--project-map` as needed) — see [Prune stale spaces / project map](#prune-stale-spaces--project-map)
 - For Doc operations, check the [ClickUp API Limitations](README.md#clickup-api-limitations) section in the README
 - Task IDs can usually be found in the ClickUp task URL after the `/t/` part
 - All commands that output data in the terminal can be piped to files using standard shell redirects (e.g., `npx ts-node src/cli.ts list workspaces > workspaces.txt`)
