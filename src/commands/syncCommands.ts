@@ -1,6 +1,14 @@
 import { Command } from 'commander';
-import { getTask, getTasks } from '../lib/clickup';
-import { exportTask, exportTasks, importTask, getLocalTasks, getLocalTaskById } from '../lib/localSync';
+import { getTask, getTasks, getDefaultWorkspaceId } from '../lib/clickup';
+import { collectWorkspaceTasks, listAllFilterLabel } from '../lib/workspaceTasks';
+import {
+  exportTask,
+  exportTasks,
+  importTask,
+  getLocalTasks,
+  getLocalTaskById,
+  pruneLocalTasks,
+} from '../lib/localSync';
 import fs from 'fs';
 import path from 'path';
 
@@ -97,6 +105,121 @@ export function registerSyncCommands(program: Command) {
         }
       } catch (error) {
         console.error(`Failed to push changes for task ${taskId}.`);
+      }
+    });
+
+  // Export open tasks from whole workspace, then prune local terminal-status files
+  syncCommand
+    .command('refresh-open')
+    .description(
+      'Export all non-terminal tasks workspace-wide (same filter as "list all -e" default), then run prune-local for done/complete/closed'
+    )
+    .option(
+      '-w, --workspace <workspace_id>',
+      'Workspace ID (default: CLICKUP_WORKSPACE_ID from .env)'
+    )
+    .option('-a, --archived', 'Include archived tasks when fetching lists')
+    .option(
+      '--prune-dry-run',
+      'Only for the prune step: print deletions without removing files (export still writes)'
+    )
+    .option(
+      '--match <statuses>',
+      'Comma-separated statuses for the prune step (default: closed,done,complete)'
+    )
+    .action(
+      async (options: {
+        workspace?: string;
+        archived?: boolean;
+        pruneDryRun?: boolean;
+        match?: string;
+      }) => {
+        try {
+          const workspaceId = options.workspace || getDefaultWorkspaceId();
+          if (!workspaceId) {
+            console.error(
+              'Workspace ID required: use -w <id> or set CLICKUP_WORKSPACE_ID in your .env file.'
+            );
+            return;
+          }
+
+          console.log('Step 1 — collecting tasks from ClickUp (excludes done, complete, closed)…');
+          const tasks = await collectWorkspaceTasks(workspaceId, {
+            includeArchived: !!options.archived,
+            filterMode: 'default',
+            verbose: false,
+          });
+          console.log(
+            `Found ${tasks.length} task(s) — ${listAllFilterLabel('default')}`
+          );
+
+          if (tasks.length > 0) {
+            const paths = await exportTasks(tasks);
+            console.log(`Exported ${paths.length} task(s) under ./tasks\n`);
+          } else {
+            console.log('No tasks to export.\n');
+          }
+
+          const matchStatuses =
+            options.match && options.match.trim()
+              ? options.match
+                  .split(',')
+                  .map(s => s.toLowerCase().trim())
+                  .filter(Boolean)
+              : ['closed', 'done', 'complete'];
+
+          console.log(
+            `Step 2 — prune local files (status in: ${matchStatuses.join(', ')})${options.pruneDryRun ? ' [dry-run]' : ''}…`
+          );
+          const r = pruneLocalTasks({
+            dryRun: !!options.pruneDryRun,
+            matchStatuses,
+          });
+          console.log(
+            `\nPrune summary: ${r.removedFiles} markdown file(s), ${r.removedAttachmentDirs} attachment folder(s) ` +
+              `${options.pruneDryRun ? 'would be removed' : 'removed'}; ` +
+              `${r.kept} kept; ${r.skippedNoId} skipped (missing id).`
+          );
+        } catch (error) {
+          console.error('Failed refresh-open:', error);
+        }
+      }
+    );
+
+  // Remove local exports for terminal / chosen statuses (based on frontmatter only)
+  syncCommand
+    .command('prune-local')
+    .description(
+      'Delete local task .md files whose frontmatter status matches, and their <taskId>-attachments folders'
+    )
+    .option('--dry-run', 'Print what would be deleted; do not remove files')
+    .option(
+      '--match <statuses>',
+      'Comma-separated status names (case-insensitive). Default: closed,done,complete'
+    )
+    .action((options: { dryRun?: boolean; match?: string }) => {
+      try {
+        const matchStatuses =
+          options.match && options.match.trim()
+            ? options.match
+                .split(',')
+                .map(s => s.toLowerCase().trim())
+                .filter(Boolean)
+            : ['closed', 'done', 'complete'];
+
+        const r = pruneLocalTasks({
+          dryRun: !!options.dryRun,
+          matchStatuses,
+        });
+
+        console.log(
+          `\nPrune ${options.dryRun ? '(dry-run) ' : ''}summary: ` +
+            `${r.removedFiles} markdown file(s), ${r.removedAttachmentDirs} attachment folder(s) ` +
+            `${options.dryRun ? 'would be removed' : 'removed'}; ` +
+            `${r.kept} kept (status not matched); ${r.skippedNoId} skipped (missing id).`
+        );
+      } catch (error) {
+        console.error('Failed to prune local tasks.');
       }
     });
 

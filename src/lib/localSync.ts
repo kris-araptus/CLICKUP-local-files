@@ -7,6 +7,7 @@ import {
   extractSlugPartFromFilename,
   pickSlugPartForNew,
   readTaskIdFromMdFile,
+  readStatusFromMdFile,
   formatTaskMarkdownFilename,
 } from './taskFilename';
 
@@ -526,4 +527,67 @@ export function getLocalTaskById(taskId: string): string | null {
     }
   }
   return null;
+}
+
+export interface PruneLocalTasksResult {
+  removedFiles: number;
+  removedAttachmentDirs: number;
+  kept: number;
+  skippedNoId: number;
+}
+
+/**
+ * Delete local task markdown files whose frontmatter `status` is in matchStatuses
+ * (case-insensitive exact match after trim). Also removes `tasks/.../<taskId>-attachments/`
+ * when present. Does not call the ClickUp API.
+ */
+export function pruneLocalTasks(options: {
+  dryRun: boolean;
+  matchStatuses: string[];
+}): PruneLocalTasksResult {
+  const matchSet = new Set(
+    options.matchStatuses.map(s => s.toLowerCase().trim()).filter(Boolean)
+  );
+  const paths = getLocalTasks();
+  let removedFiles = 0;
+  let removedAttachmentDirs = 0;
+  let kept = 0;
+  let skippedNoId = 0;
+
+  for (const filePath of paths) {
+    const taskId = readTaskIdFromMdFile(filePath);
+    if (!taskId) {
+      console.warn(`Prune skip (no id in frontmatter): ${filePath}`);
+      skippedNoId++;
+      continue;
+    }
+
+    const statusRaw = readStatusFromMdFile(filePath);
+    const st = (statusRaw || '').toLowerCase().trim();
+    if (!matchSet.has(st)) {
+      kept++;
+      continue;
+    }
+
+    const parentDir = path.dirname(filePath);
+    const attachDir = path.join(parentDir, `${taskId}-attachments`);
+    const relMd = path.relative(process.cwd(), filePath);
+    const relAtt = path.relative(process.cwd(), attachDir);
+
+    console.log(`${options.dryRun ? '[dry-run] ' : ''}delete ${relMd}`);
+    if (!options.dryRun) {
+      fs.unlinkSync(filePath);
+    }
+    removedFiles++;
+
+    if (fs.existsSync(attachDir)) {
+      console.log(`${options.dryRun ? '[dry-run] ' : ''}delete ${relAtt}/`);
+      if (!options.dryRun) {
+        fs.rmSync(attachDir, { recursive: true, force: true });
+      }
+      removedAttachmentDirs++;
+    }
+  }
+
+  return { removedFiles, removedAttachmentDirs, kept, skippedNoId };
 }

@@ -2,14 +2,26 @@
 
 This document contains all available commands for the ClickUp Local Updater CLI tool.
 
+Run from the repo root after `pnpm install`:
+
+```bash
+npx ts-node src/cli.ts <command> [subcommand] [options]
+# same via package script (arguments after -- go to the CLI):
+pnpm run cli -- <command> [subcommand] [options]
+```
+
 ## Table of Contents
 
 - [Authentication](#authentication)
+- [Default workspace (`CLICKUP_WORKSPACE_ID`)](#default-workspace-clickup_workspace_id)
 - [List Commands](#list-commands)
 - [Task Commands](#task-commands)
 - [Task Sync Commands](#task-sync-commands)
+  - [Refresh open (export + prune)](#refresh-open-export--prune)
+- [Work command](#work-command)
 - [Task markdown filenames](#task-markdown-filenames)
 - [Doc Commands](#doc-commands)
+- [Tips & Troubleshooting](#tips--troubleshooting)
 
 ## Authentication
 
@@ -61,18 +73,42 @@ npx ts-node src/cli.ts list spaces -w <workspace_id>
 
 ### Entire workspace (tree)
 
+Walks every space → folder → list (and folderless lists), then lists or exports tasks. **`-w`** is optional if **`CLICKUP_WORKSPACE_ID`** is set in `.env`.
+
 ```bash
-# List all spaces, folders, lists, and open tasks (-w optional if CLICKUP_WORKSPACE_ID is set)
 npx ts-node src/cli.ts list all
 npx ts-node src/cli.ts list all -w <workspace_id>
 
-# Also export every listed task to ./tasks
+# Export listed tasks to ./tasks/<Space>/ (same filters as below)
+npx ts-node src/cli.ts list all -e
+```
+
+**Options**
+
+| Flag | Meaning |
+|------|--------|
+| `-e`, `--export` | Write each collected task to `./tasks` as Markdown (see [Task markdown filenames](#task-markdown-filenames)). |
+| `-a`, `--archived` | Pass archived tasks through to the API when loading lists. |
+
+**Status filters** (at most one effective mode; default is **active / non-terminal**):
+
+| Mode | Flags | What is included |
+|------|--------|------------------|
+| **Default** | _(none)_ | All tasks **except** status `done`, `complete`, and `closed` (case-insensitive). Includes open, in progress, on hold, review, to do, etc. |
+| **Everything** | `--all-statuses` | Every task, including done, complete, and closed. **Ignores** `--without-closed`. |
+| **All but "closed"** | `--without-closed` | Every task **except** status exactly `closed`; **still includes** done and complete. |
+
+Examples:
+
+```bash
+# Default: no done/complete/closed — usual choice for "sync what's still live"
 npx ts-node src/cli.ts list all -e
 
-# Options:
-# -e, --export            Export all collected tasks to ./tasks
-# -a, --archived          Include archived tasks when fetching
-# --all-statuses          Include done/closed tasks (default: open + in progress only)
+# Include completed (done/complete) but still drop status "closed" only
+npx ts-node src/cli.ts list all -e --without-closed
+
+# Literally every task in the workspace (including done, complete, closed)
+npx ts-node src/cli.ts list all -e --all-statuses
 ```
 
 ### Folders
@@ -84,9 +120,14 @@ npx ts-node src/cli.ts list folders -s <space_id>
 
 ### Lists
 
+Requires **either** `-s` (space) **or** `-f` (folder).
+
 ```bash
-# List all lists in a folder
+# Lists inside a folder
 npx ts-node src/cli.ts list lists -f <folder_id>
+
+# Folderless lists attached to a space
+npx ts-node src/cli.ts list lists -s <space_id>
 ```
 
 ### Tasks
@@ -147,6 +188,40 @@ npx ts-node src/cli.ts sync export-list <list_id> -a
 npx ts-node src/cli.ts sync list-local
 ```
 
+### Prune local tasks
+
+Deletes local **`.md`** files under `./tasks` when YAML frontmatter **`status`** matches (default: **`closed`**, **`done`**, **`complete`** — case-insensitive, exact match after trim). Also deletes **`./tasks/<Space>/<taskId>-attachments/`** when that folder exists. Does **not** change ClickUp; refresh exports first (`sync pull` / `list all -e`) if your files are stale.
+
+```bash
+# Preview
+npx ts-node src/cli.ts sync prune-local --dry-run
+
+# Remove closed, done, and complete (default match list)
+npx ts-node src/cli.ts sync prune-local
+
+# Only remove tasks whose status is exactly "closed"
+npx ts-node src/cli.ts sync prune-local --match closed
+
+# Several custom statuses
+npx ts-node src/cli.ts sync prune-local --match "closed,complete"
+```
+
+### Refresh open (export + prune)
+
+One command: **export** every workspace task that passes the **same default filter** as `list all -e` (excludes **done**, **complete**, **closed**), then **prune** local `.md` files (and `*-attachments`) whose frontmatter `status` is in the prune list (default **closed**, **done**, **complete**). Requires workspace **`-w`** or **`CLICKUP_WORKSPACE_ID`**.
+
+```bash
+npx ts-node src/cli.ts sync refresh-open
+
+# Preview prune only (files are still exported)
+npx ts-node src/cli.ts sync refresh-open --prune-dry-run
+
+# Include archived tasks in the API fetch; custom prune statuses
+npx ts-node src/cli.ts sync refresh-open -a --match closed
+```
+
+Equivalent manual sequence: `list all -e` (no extra flags) then `sync prune-local`.
+
 ### Pull Tasks
 
 ```bash
@@ -187,6 +262,17 @@ Your reply here — this will be posted to ClickUp on push.
 ```
 
 Any `###` block missing `[id:...]` is treated as new and posted via `POST /task/{id}/comment`. After pushing, run `sync pull <task_id>` to refresh the file with the new comment's ID.
+
+## Work command
+
+Pulls a task from ClickUp via `sync export-task`, then copies the exported Markdown into a **`CURRENT_TASK.md`** file inside a local project directory under **`/Users/kristopherblack/Software/`**, resolved from the task’s **`space_name`** (see `project-map.json` for space → folder overrides).
+
+```bash
+npx ts-node src/cli.ts work <task_id>
+npx ts-node src/cli.ts work <task_id> -f   # overwrite existing CURRENT_TASK.md even if it tracks another task
+```
+
+**Note:** The base path `SOFTWARE_BASE` is hardcoded in `src/commands/workCommands.ts` for this checkout. Adjust there (or fork the map) if your projects live elsewhere. If no directory matches, the task is still saved under `./tasks/...` only.
 
 ## Task markdown filenames
 
@@ -299,6 +385,9 @@ npx ts-node src/cli.ts doc create -l <list_id> -t "Document Title" -c "Content"
 
 - If you encounter authentication errors, delete the `.clickup_token_*.json` file in the project root (or the path shown as `Using token file:`) and run any command to re-authenticate
 - If a command says a workspace ID is required, run `list workspaces` and set `CLICKUP_WORKSPACE_ID` in `.env`, or pass `-w <workspace_id>`
+- To **rename existing** task files to `{status}__{slug}.md`, use `pnpm migrate-task-filenames` (see [Task markdown filenames](#task-markdown-filenames))
+- To **delete local** exports for finished work, use `sync prune-local` (see [Prune local tasks](#prune-local-tasks)); run with `--dry-run` first
+- To **export open tasks and prune locals** in one step, use `sync refresh-open` (see [Refresh open (export + prune)](#refresh-open-export--prune))
 - For Doc operations, check the [ClickUp API Limitations](README.md#clickup-api-limitations) section in the README
 - Task IDs can usually be found in the ClickUp task URL after the `/t/` part
-- All commands that output data in the terminal can be piped to files using standard shell redirects (e.g., `npx ts-node src/cli.ts list workspaces > workspaces.txt`) 
+- All commands that output data in the terminal can be piped to files using standard shell redirects (e.g., `npx ts-node src/cli.ts list workspaces > workspaces.txt`)
