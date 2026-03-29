@@ -289,6 +289,12 @@ npx ts-node src/cli.ts sync push <file_path>
 
 # Push changes for a specific task by ID back to ClickUp
 npx ts-node src/cli.ts sync push-task <task_id>
+
+# Push every local .md under tasks/<Space>/ for one space (folder name from API — same as export-space)
+npx ts-node src/cli.ts sync push-space <space_id>
+
+# List what would be pushed (no API calls)
+npx ts-node src/cli.ts sync push-space <space_id> --dry-run
 ```
 
 **What gets pushed:**

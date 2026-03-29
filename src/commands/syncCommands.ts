@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { getTask, getTasks, getDefaultWorkspaceId } from '../lib/clickup';
+import { getTask, getTasks, getDefaultWorkspaceId, getSpace } from '../lib/clickup';
 import {
   collectWorkspaceTasks,
   collectTasksForSpace,
@@ -11,7 +11,9 @@ import {
   exportTasks,
   importTask,
   getLocalTasks,
+  getLocalTasksInProject,
   getLocalTaskById,
+  sanitizeDirName,
   pruneLocalTasks,
   pruneOrphanExports,
 } from '../lib/localSync';
@@ -224,6 +226,67 @@ export function registerSyncCommands(program: Command) {
         }
       } catch (error) {
         console.error(`Failed to push changes for task ${taskId}.`);
+      }
+    });
+
+  syncCommand
+    .command('push-space <space_id>')
+    .description(
+      'Push all local task .md files under tasks/<Space>/ for this space (same folder naming as export-space)'
+    )
+    .option('--dry-run', 'List files that would be pushed; do not call ClickUp')
+    .action(async (spaceId: string, options: { dryRun?: boolean }) => {
+      try {
+        const spaceObj = await getSpace(spaceId);
+        const spaceName = spaceObj?.name ?? `space-${spaceId}`;
+        const projectSubdir = sanitizeDirName(spaceName);
+        const paths = getLocalTasksInProject(projectSubdir);
+
+        if (paths.length === 0) {
+          console.log(
+            `No .md files under tasks/${projectSubdir}/ (space "${spaceName}", id ${spaceId}). ` +
+              `Export first: sync export-space ${spaceId}`
+          );
+          return;
+        }
+
+        paths.sort();
+
+        if (options.dryRun) {
+          console.log(
+            `Dry-run: would push ${paths.length} file(s) under tasks/${projectSubdir}/ ` +
+              `(space "${spaceName}", id ${spaceId}):\n`
+          );
+          for (const p of paths) {
+            console.log(`  ${p}`);
+          }
+          return;
+        }
+
+        console.log(
+          `Pushing ${paths.length} task file(s) from tasks/${projectSubdir}/ ` +
+            `(space "${spaceName}", id ${spaceId})…\n`
+        );
+
+        let ok = 0;
+        let fail = 0;
+        for (let i = 0; i < paths.length; i++) {
+          const filePath = paths[i];
+          console.log(`[${i + 1}/${paths.length}] ${filePath}`);
+          console.log(`Pushing changes from ${filePath} to ClickUp...`);
+          const success = await importTask(filePath);
+          if (success) {
+            ok++;
+            console.log('Task updated successfully in ClickUp.\n');
+          } else {
+            fail++;
+            console.error('Failed to update task in ClickUp.\n');
+          }
+        }
+
+        console.log(`Done: ${ok} succeeded, ${fail} failed, ${paths.length} total.`);
+      } catch (error) {
+        console.error(`Failed push-space for ${spaceId}.`, error);
       }
     });
 
