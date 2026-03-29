@@ -1,6 +1,11 @@
 import { Command } from 'commander';
 import { getTask, getTasks, getDefaultWorkspaceId } from '../lib/clickup';
-import { collectWorkspaceTasks, listAllFilterLabel } from '../lib/workspaceTasks';
+import {
+  collectWorkspaceTasks,
+  collectTasksForSpace,
+  listAllFilterLabel,
+  listAllFilterModeFromFlags,
+} from '../lib/workspaceTasks';
 import {
   exportTask,
   exportTasks,
@@ -8,6 +13,7 @@ import {
   getLocalTasks,
   getLocalTaskById,
   pruneLocalTasks,
+  pruneOrphanExports,
 } from '../lib/localSync';
 import {
   findStaleTaskSpaceDirNames,
@@ -60,6 +66,113 @@ export function registerSyncCommands(program: Command) {
         console.error(`Failed to export tasks from list ${listId}.`);
       }
     });
+
+  syncCommand
+    .command('export-space <space_id>')
+    .description(
+      'Export tasks from one ClickUp space, prune terminal statuses, then remove orphan locals not in this export'
+    )
+    .option('-a', '--archived', 'Include archived tasks when fetching lists')
+    .option('--all-statuses', 'Include done, complete, closed')
+    .option('--without-closed', 'Include all except status "closed"')
+    .option('--no-prune', 'Skip all pruning after export')
+    .option(
+      '--no-prune-orphans',
+      'Keep local .md files for tasks not in this export (e.g. keep copies of done tasks that were filtered out)'
+    )
+    .option(
+      '--prune-dry-run',
+      'Prune steps only: print deletions; export still writes files'
+    )
+    .option(
+      '--match <statuses>',
+      'Comma-separated statuses for prune (default: closed,done,complete)'
+    )
+    .action(
+      async (
+        spaceId: string,
+        options: {
+          archived?: boolean;
+          allStatuses?: boolean;
+          withoutClosed?: boolean;
+          noPrune?: boolean;
+          noPruneOrphans?: boolean;
+          pruneDryRun?: boolean;
+          match?: string;
+        }
+      ) => {
+        try {
+          const filterMode = listAllFilterModeFromFlags(
+            options.allStatuses,
+            options.withoutClosed
+          );
+          const { tasks, projectSubdir } = await collectTasksForSpace(spaceId, {
+            includeArchived: !!options.archived,
+            filterMode,
+            verbose: true,
+          });
+
+          if (tasks.length > 0) {
+            const paths = await exportTasks(tasks);
+            console.log(`Exported ${paths.length} tasks to the 'tasks' directory.\n`);
+          } else {
+            console.log('No tasks to export.\n');
+          }
+
+          if (options.noPrune) {
+            return;
+          }
+
+          const matchStatuses =
+            options.match && options.match.trim()
+              ? options.match
+                  .split(',')
+                  .map(s => s.toLowerCase().trim())
+                  .filter(Boolean)
+              : ['closed', 'done', 'complete'];
+
+          console.log(
+            `Pruning local files under tasks/${projectSubdir}/ (status: ${matchStatuses.join(', ')})${options.pruneDryRun ? ' [dry-run]' : ''}…`
+          );
+          const r = pruneLocalTasks({
+            dryRun: !!options.pruneDryRun,
+            matchStatuses,
+            onlySubdir: projectSubdir,
+          });
+          console.log(
+            `\nPrune summary: ${r.removedFiles} markdown file(s), ${r.removedAttachmentDirs} attachment folder(s) ` +
+              `${options.pruneDryRun ? 'would be removed' : 'removed'}; ` +
+              `${r.kept} kept; ${r.skippedNoId} skipped (missing id).`
+          );
+
+          if (options.noPruneOrphans) {
+            return;
+          }
+
+          const validIds = new Set(tasks.map((t: { id: string }) => String(t.id)));
+          if (validIds.size === 0) {
+            console.log('\nSkipping orphan prune (no tasks in this export).');
+            return;
+          }
+
+          console.log(
+            `\nRemoving local files under tasks/${projectSubdir}/ that are not in this export (${validIds.size} task id(s))${options.pruneDryRun ? ' [dry-run]' : ''}…`
+          );
+          const o = pruneOrphanExports({
+            onlySubdir: projectSubdir,
+            validTaskIds: validIds,
+            dryRun: !!options.pruneDryRun,
+          });
+          console.log(
+            `Orphan prune: ${o.removedFiles} markdown file(s), ${o.removedAttachmentDirs} attachment folder(s) ` +
+              `${options.pruneDryRun ? 'would be removed' : 'removed'}; ` +
+              `${o.skippedNoId} skipped (missing id).`
+          );
+        } catch (error) {
+          console.error(`Failed to export space ${spaceId}.`);
+        }
+      }
+    );
 
   // Command to push changes from a local file back to ClickUp
   syncCommand

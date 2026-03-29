@@ -281,6 +281,20 @@ export async function getSpaces(workspaceId: string): Promise<any> {
   }
 }
 
+/** Single space (for export-space). */
+export async function getSpace(spaceId: string): Promise<any> {
+  try {
+    console.log(`Fetching space ${spaceId}...`);
+    const clickupApi = await getApiClient();
+    const response = await clickupApi.get(`/space/${spaceId}`);
+    const data = response.data;
+    return data?.space ?? data;
+  } catch (error) {
+    handleApiError(error, `fetching space ${spaceId}`);
+    throw error;
+  }
+}
+
 // --- List Functions ---
 
 /**

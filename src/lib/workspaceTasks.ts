@@ -1,10 +1,12 @@
 import {
   getSpaces,
+  getSpace,
   getFolders,
   getLists,
   getListsInFolder,
   getTasks,
 } from './clickup';
+import { sanitizeDirName } from './localSync';
 
 const CLOSED_STATUSES = ['done', 'complete', 'closed'];
 
@@ -125,4 +127,83 @@ export async function collectWorkspaceTasks(
   }
 
   return allTasks;
+}
+
+/** One space: folders + folderless lists, same metadata as workspace export. */
+export async function collectTasksForSpace(
+  spaceId: string,
+  options: {
+    includeArchived: boolean;
+    filterMode: ListAllFilterMode;
+    verbose: boolean;
+  }
+): Promise<{ tasks: any[]; projectSubdir: string }> {
+  const taskParams = options.includeArchived ? { archived: true } : {};
+  const { filterMode, verbose } = options;
+
+  const spaceObj = await getSpace(spaceId);
+  const space = {
+    id: spaceObj?.id ?? spaceId,
+    name: spaceObj?.name ?? `space-${spaceId}`,
+  };
+
+  if (verbose) console.log(`\n📁 Space: ${space.name} (ID: ${space.id})`);
+
+  const allTasks: any[] = [];
+  const folders = (await getFolders(space.id).catch(() => []) as any[]) || [];
+  const folderlessLists = (await getLists(space.id).catch(() => []) as any[]) || [];
+
+  for (const folder of folders) {
+    if (verbose) console.log(`  📂 Folder: ${folder.name} (ID: ${folder.id})`);
+    const lists = (await getListsInFolder(folder.id).catch(() => []) as any[]) || [];
+    for (const list of lists) {
+      const tasks = (await getTasks(list.id, taskParams).catch(() => []) as any[]) || [];
+      const picked = filterTasksForListAll(tasks, filterMode);
+      const skipped = tasks.length - picked.length;
+      if (verbose) {
+        const skipHint = skipped > 0 ? ` (${skipped} filtered out)` : '';
+        console.log(
+          `    📋 List: ${list.name} (ID: ${list.id}) — ${picked.length} task(s)${skipHint}`
+        );
+        picked.forEach((t: any) => {
+          console.log(`       • [${t.status?.status || '?'}] ${t.name} (ID: ${t.id})`);
+        });
+      }
+      picked.forEach((t: any) => {
+        t._space_name = space.name;
+        t._folder_name = folder.name;
+        t._list_name = list.name;
+        allTasks.push(t);
+      });
+    }
+  }
+
+  for (const list of folderlessLists) {
+    const tasks = (await getTasks(list.id, taskParams).catch(() => []) as any[]) || [];
+    const picked = filterTasksForListAll(tasks, filterMode);
+    const skipped = tasks.length - picked.length;
+    if (verbose) {
+      const skipHint = skipped > 0 ? ` (${skipped} filtered out)` : '';
+      console.log(
+        `  📋 List: ${list.name} (ID: ${list.id}) — ${picked.length} task(s)${skipHint}`
+      );
+      picked.forEach((t: any) => {
+        console.log(`     • [${t.status?.status || '?'}] ${t.name} (ID: ${t.id})`);
+      });
+    }
+    picked.forEach((t: any) => {
+      t._space_name = space.name;
+      t._folder_name = '';
+      t._list_name = list.name;
+      allTasks.push(t);
+    });
+  }
+
+  if (verbose) {
+    console.log(
+      `\n--- Total: ${allTasks.length} task(s) — ${listAllFilterLabel(filterMode)} ---\n`
+    );
+  }
+
+  return { tasks: allTasks, projectSubdir: sanitizeDirName(space.name) };
 }

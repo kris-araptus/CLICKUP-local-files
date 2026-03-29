@@ -182,6 +182,32 @@ npx ts-node src/cli.ts sync export-list <list_id>
 
 # Export all tasks from a list, including archived
 npx ts-node src/cli.ts sync export-list <list_id> -a
+
+# Export from every list in one space (space ID from list spaces / ClickUp URL)
+# Default: same as list all -e — excludes done, complete, closed; then:
+#   1) Prunes local files whose frontmatter status is closed, done, or complete
+#   2) Removes "orphan" locals: any .md under tasks/<ThatSpace>/ whose frontmatter
+#      id was not in this export (e.g. task moved list, deleted, or filtered out as done)
+npx ts-node src/cli.ts sync export-space <space_id>
+
+# Keep orphan locals (e.g. you want copies on disk for tasks the API did not return)
+npx ts-node src/cli.ts sync export-space <space_id> --no-prune-orphans
+
+# Prune only frontmatter status "closed" in that space’s tasks folder
+npx ts-node src/cli.ts sync export-space <space_id> --match closed
+
+# Export without deleting any local files afterward
+npx ts-node src/cli.ts sync export-space <space_id> --no-prune
+
+# See what prune would delete; export still runs
+npx ts-node src/cli.ts sync export-space <space_id> --prune-dry-run
+
+# That space only, but exclude only status "closed" (includes done + complete)
+npx ts-node src/cli.ts sync export-space <space_id> --without-closed
+
+# That space, every task including done/complete/closed (prune still drops local terminal files;
+# orphan step then only removes files whose ids are missing from that full export)
+npx ts-node src/cli.ts sync export-space <space_id> --all-statuses
 ```
 
 ### List Local Tasks

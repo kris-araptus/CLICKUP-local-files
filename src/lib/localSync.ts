@@ -512,6 +512,26 @@ export function getLocalTasks(): string[] {
   return paths;
 }
 
+/** `.md` task files only under `tasks/<projectSubdir>/` (single space folder). */
+export function getLocalTasksInProject(projectSubdir: string): string[] {
+  if (
+    !projectSubdir ||
+    projectSubdir.includes('..') ||
+    projectSubdir.includes('/') ||
+    projectSubdir.includes('\\')
+  ) {
+    throw new Error(`Invalid project subdir: ${projectSubdir}`);
+  }
+  const dir = path.join(TASKS_DIR, projectSubdir);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    return [];
+  }
+  return fs
+    .readdirSync(dir)
+    .filter(f => f.endsWith('.md'))
+    .map(f => path.join(dir, f));
+}
+
 /**
  * Get a specific local task by ID (searches all project subdirs by frontmatter).
  */
@@ -544,11 +564,15 @@ export interface PruneLocalTasksResult {
 export function pruneLocalTasks(options: {
   dryRun: boolean;
   matchStatuses: string[];
+  /** If set, only prune under `tasks/<onlySubdir>/` (export-space). */
+  onlySubdir?: string;
 }): PruneLocalTasksResult {
   const matchSet = new Set(
     options.matchStatuses.map(s => s.toLowerCase().trim()).filter(Boolean)
   );
-  const paths = getLocalTasks();
+  const paths = options.onlySubdir
+    ? getLocalTasksInProject(options.onlySubdir)
+    : getLocalTasks();
   let removedFiles = 0;
   let removedAttachmentDirs = 0;
   let kept = 0;
@@ -590,4 +614,62 @@ export function pruneLocalTasks(options: {
   }
 
   return { removedFiles, removedAttachmentDirs, kept, skippedNoId };
+}
+
+export interface PruneOrphanExportsResult {
+  removedFiles: number;
+  removedAttachmentDirs: number;
+  skippedNoId: number;
+}
+
+/**
+ * Remove `tasks/<onlySubdir>/*.md` whose frontmatter `id` is not in `validTaskIds`
+ * (task missing from this export run: done/closed in API, deleted, or otherwise filtered out).
+ */
+export function pruneOrphanExports(options: {
+  onlySubdir: string;
+  validTaskIds: Set<string>;
+  dryRun: boolean;
+}): PruneOrphanExportsResult {
+  if (options.validTaskIds.size === 0) {
+    return { removedFiles: 0, removedAttachmentDirs: 0, skippedNoId: 0 };
+  }
+
+  const paths = getLocalTasksInProject(options.onlySubdir);
+  let removedFiles = 0;
+  let removedAttachmentDirs = 0;
+  let skippedNoId = 0;
+
+  for (const filePath of paths) {
+    const taskId = readTaskIdFromMdFile(filePath);
+    if (!taskId) {
+      console.warn(`Orphan prune skip (no id): ${filePath}`);
+      skippedNoId++;
+      continue;
+    }
+    if (options.validTaskIds.has(taskId)) {
+      continue;
+    }
+
+    const parentDir = path.dirname(filePath);
+    const attachDir = path.join(parentDir, `${taskId}-attachments`);
+    const relMd = path.relative(process.cwd(), filePath);
+    const relAtt = path.relative(process.cwd(), attachDir);
+
+    console.log(`${options.dryRun ? '[dry-run] ' : ''}orphan ${relMd}`);
+    if (!options.dryRun) {
+      fs.unlinkSync(filePath);
+    }
+    removedFiles++;
+
+    if (fs.existsSync(attachDir)) {
+      console.log(`${options.dryRun ? '[dry-run] ' : ''}orphan ${relAtt}/`);
+      if (!options.dryRun) {
+        fs.rmSync(attachDir, { recursive: true, force: true });
+      }
+      removedAttachmentDirs++;
+    }
+  }
+
+  return { removedFiles, removedAttachmentDirs, skippedNoId };
 }
